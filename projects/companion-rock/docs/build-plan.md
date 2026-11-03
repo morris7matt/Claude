@@ -21,6 +21,8 @@ second.
 - [ ] Wakes on pick-up, yawns and sleeps after about a minute of stillness
 - [ ] Purrs when petted, stops a moment after letting go
 - [ ] Dizzy when shaken, giggles when it recovers
+- [ ] Pedometer: 100 real steps count as roughly 80-120 in a pocket and in a hand; the cheer plays at
+      the milestone; the count is still there after switching off and on
 - [ ] Doesn't purr or wake by itself on a table or in a bag
 - [ ] Volume comfortable at arm's length (not harsh, not shrill)
 - [ ] Runs from the battery for at least several hours of normal use (measure it)

@@ -1,6 +1,7 @@
 // Host-side tests for the behavior core. Build and run with `make test`
 // from the firmware folder. No hardware needed.
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include "behavior.h"
@@ -47,6 +48,20 @@ struct Sim {
     while (now < end) step(a, g, t, temp);
   }
 };
+
+
+// Synthetic walking: one half-sine acceleration pulse (200 ms) per step.
+static void walk(Sim& s, int steps, uint32_t periodMs, float amp = 0.4f, float gyro = 30.0f) {
+  for (int i = 0; i < steps; i++) {
+    uint32_t start = s.now;
+    while (s.now < start + periodMs) {
+      uint32_t t = s.now - start;
+      float a = 1.0f;
+      if (t < 200) a += amp * sinf(3.14159265f * (float)t / 200.0f);
+      s.step(a, gyro);
+    }
+  }
+}
 
 static void test_boot_greeting() {
   Sim s;
@@ -189,6 +204,111 @@ static void test_warm_color() {
   CHECK(w.r > w.b, "warm hands glow orange");
 }
 
+
+static void test_steps_counted_when_walking() {
+  Sim s;
+  s.step();
+  walk(s, 40, 550);
+  CHECK(s.out.steps >= 38 && s.out.steps <= 40, "40 walking steps are counted (+/- 2)");
+}
+
+static void test_steps_fast_and_slow() {
+  Sim fast, slow;
+  fast.step();
+  slow.step();
+  walk(fast, 40, 340);   // jogging cadence
+  walk(slow, 30, 1000);  // slow stroll
+  CHECK(fast.out.steps >= 38 && fast.out.steps <= 40, "jogging cadence is counted");
+  CHECK(slow.out.steps >= 28 && slow.out.steps <= 30, "slow stroll is counted");
+}
+
+static void test_no_steps_when_still() {
+  Sim s;
+  s.step();
+  s.run(30000);
+  CHECK(s.out.steps == 0, "no steps while sitting still");
+}
+
+static void test_few_bumps_are_not_steps() {
+  Sim s;
+  s.step();
+  walk(s, 3, 550);  // fewer than stepsToConfirm
+  s.run(3000);
+  CHECK(s.out.steps == 0, "three bumps do not confirm a walk");
+}
+
+static void test_pause_breaks_rhythm() {
+  Sim s;
+  s.step();
+  walk(s, 10, 550);
+  uint32_t first = s.out.steps;
+  s.run(4000);
+  walk(s, 3, 550);  // too few to confirm again
+  CHECK(s.out.steps == first, "stray bumps after a pause are not counted");
+  walk(s, 10, 550);
+  CHECK(s.out.steps > first + 8, "walking again after a pause counts again");
+}
+
+static void test_shaking_is_not_steps() {
+  Sim s;
+  s.step();
+  s.run(1000);
+  for (int i = 0; i < 4; i++) {
+    s.step(2.2f);
+    s.run(140);
+  }
+  CHECK(s.b.state() == State::Dizzy, "precondition: dizzy");
+  CHECK(s.out.steps == 0, "a shake is not counted as steps");
+  s.run(3500);
+  for (int i = 0; i < 10; i++) {  // rapid shaking, 3 hits/s
+    s.step(1.8f);
+    s.run(300);
+  }
+  CHECK(s.out.steps <= 8, "irregular rattling mostly isn't counted");
+}
+
+static void test_restore_does_not_celebrate() {
+  Sim s;
+  s.b.setSteps(1000);  // exactly on a milestone
+  Outputs o = s.step();
+  CHECK(o.steps == 1000, "restored count is reported");
+  CHECK(o.sound == Sound::WakeChirp, "restoring a count does not trigger a cheer");
+}
+
+static void test_milestone_cheers_once_and_flashes_gold() {
+  Sim s;
+  s.b.setSteps(490);
+  s.step();
+  int cheers = 0;
+  bool sawGold = false;
+  uint32_t end = 0;
+  for (int i = 0; i < 30; i++) {
+    uint32_t start = s.now;
+    while (s.now < start + 550) {
+      uint32_t t = s.now - start;
+      float a = 1.0f + (t < 200 ? 0.4f * sinf(3.14159265f * (float)t / 200.0f) : 0.0f);
+      Outputs o = s.step(a, 30.0f);
+      if (o.sound == Sound::StepCheer) cheers++;
+      if (o.r > 0 && o.g > 0 && o.b == 0 && o.state != State::Purring) sawGold = true;
+    }
+    end = s.out.steps;
+  }
+  CHECK(end >= 500, "passed the milestone");
+  CHECK(cheers == 1, "cheers exactly once per milestone");
+  CHECK(sawGold, "LED flashes gold at the milestone");
+}
+
+static void test_steps_not_counted_while_asleep() {
+  Sim s;
+  s.step();
+  s.run(62000);
+  CHECK(s.b.state() == State::Sleeping, "precondition: asleep");
+  // gentle table vibration at walking pace, below the wake threshold
+  walk(s, 20, 550, 0.10f, 5.0f);
+  CHECK(s.b.state() == State::Sleeping, "gentle vibration leaves it asleep");
+  CHECK(s.out.steps == 0, "no steps counted while asleep");
+}
+
 int main() {
   test_boot_greeting();
   test_falls_asleep_when_still();
@@ -202,6 +322,15 @@ int main() {
   test_sound_rate_limit();
   test_brightness_cap();
   test_warm_color();
+  test_steps_counted_when_walking();
+  test_steps_fast_and_slow();
+  test_no_steps_when_still();
+  test_few_bumps_are_not_steps();
+  test_pause_breaks_rhythm();
+  test_shaking_is_not_steps();
+  test_restore_does_not_celebrate();
+  test_milestone_cheers_once_and_flashes_gold();
+  test_steps_not_counted_while_asleep();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures,
          failures == 1 ? "" : "s");
   return failures ? 1 : 0;

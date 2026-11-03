@@ -28,6 +28,9 @@ const Segment kGiggle[] = {
     {1100, 1400, 90, 0, 0, 0}};
 const Segment kDizzy[] = {{650, 380, 1300, 6, 110, 0}};
 const Segment kYawn[] = {{720, 300, 1000, 0, 0, 0}};
+// C5, E5, G5, C6: a happy little arpeggio.
+const Segment kCheer[] = {{523, 523, 90, 0, 0, 0},  {659, 659, 90, 0, 0, 0},
+                          {784, 784, 90, 0, 0, 0},  {1047, 1047, 220, 0, 0, 0}};
 
 const Segment* gSeq = nullptr;
 size_t gSeqLen = 0;
@@ -121,6 +124,7 @@ void audioPlay(rock::Sound s) {
     case Sound::Giggle:      gSeq = kGiggle; gSeqLen = sizeof(kGiggle) / sizeof(Segment); break;
     case Sound::DizzyWobble: gSeq = kDizzy;  gSeqLen = sizeof(kDizzy) / sizeof(Segment); break;
     case Sound::SleepYawn:   gSeq = kYawn;   gSeqLen = sizeof(kYawn) / sizeof(Segment); break;
+    case Sound::StepCheer:   gSeq = kCheer;  gSeqLen = sizeof(kCheer) / sizeof(Segment); break;
     case Sound::None:        return;
   }
   gSeg = 0;

@@ -4,6 +4,7 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
+#include <Preferences.h>
 #include <Wire.h>
 
 #include "audio.h"
@@ -17,6 +18,15 @@ Adafruit_AHTX0 aht;
 Adafruit_DRV2605 drv;
 Adafruit_NeoPixel pixel(NEOPIXEL_COUNT, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 rock::Behavior behavior;
+Preferences prefs;
+
+// Step count is saved at most every 5 minutes while it changes, and whenever the rock
+// falls asleep, to keep flash wear low. Switching the rock off mid-walk can lose up to
+// 5 minutes of steps.
+constexpr uint32_t kSaveEveryMs = 5UL * 60UL * 1000UL;
+uint32_t savedSteps = 0;
+uint32_t lastSaveMs = 0;
+rock::State lastState = rock::State::Calm;
 
 bool haveMpu = false, haveAht = false, haveDrv = false;
 float tempC = 22.0f;
@@ -59,6 +69,35 @@ void updateTouch() {
 #endif
 }
 
+void saveSteps(uint32_t steps, uint32_t now) {
+  if (steps == savedSteps) return;
+  prefs.putUInt("steps", steps);
+  savedSteps = steps;
+  lastSaveMs = now;
+  Serial.printf("steps saved: %u\n", (unsigned)steps);
+}
+
+// Serial commands over USB (for the parent): "steps" prints the count, "reset" zeroes it.
+void handleSerial() {
+  static String line;
+  while (Serial.available()) {
+    const char c = (char)Serial.read();
+    if (c != '\n' && c != '\r') {
+      if (line.length() < 16) line += c;
+      continue;
+    }
+    line.trim();
+    if (line == "steps") {
+      Serial.printf("steps: %u\n", (unsigned)behavior.steps());
+    } else if (line == "reset") {
+      behavior.setSteps(0);
+      saveSteps(0, millis());
+      Serial.println("steps reset to 0");
+    }
+    line = "";
+  }
+}
+
 void setHaptic(uint8_t level) {
   if (!haveDrv || level == lastHaptic) return;
   lastHaptic = level;
@@ -96,6 +135,11 @@ void setup() {
   }
   Serial.printf("sensors: mpu=%d aht=%d drv=%d\n", haveMpu, haveAht, haveDrv);
 
+  prefs.begin("rock", false);
+  savedSteps = prefs.getUInt("steps", 0);
+  behavior.setSteps(savedSteps);
+  Serial.printf("steps restored: %u\n", (unsigned)savedSteps);
+
   audioBegin();
   calibrateTouch();
   lastUpdateMs = millis();
@@ -103,6 +147,7 @@ void setup() {
 
 void loop() {
   audioPump();  // cheap; keeps sound smooth between sensor updates
+  handleSerial();
 
   const uint32_t now = millis();
   if (now - lastUpdateMs < UPDATE_INTERVAL_MS) return;
@@ -133,6 +178,14 @@ void loop() {
   in.touched = touched;
 
   const rock::Outputs out = behavior.update(in);
+
+  if (out.state == rock::State::Sleeping && lastState != rock::State::Sleeping) {
+    saveSteps(out.steps, now);
+  } else if (now - lastSaveMs > kSaveEveryMs) {
+    saveSteps(out.steps, now);
+    lastSaveMs = now;
+  }
+  lastState = out.state;
 
   if (out.sound != rock::Sound::None) audioPlay(out.sound);
   setHaptic(out.hapticLevel);

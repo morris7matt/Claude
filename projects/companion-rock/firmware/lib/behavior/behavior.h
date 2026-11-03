@@ -20,7 +20,8 @@ enum class Sound : uint8_t {
   PurrStart,     // soft low hum that fades in
   Giggle,        // quick run of bright beeps
   DizzyWobble,   // warbling pitch
-  SleepYawn      // slow falling tone
+  SleepYawn,     // slow falling tone
+  StepCheer      // short rising arpeggio at a step milestone
 };
 
 struct Inputs {
@@ -36,6 +37,7 @@ struct Outputs {
   Sound sound = Sound::None;  // non-None only on the single update where it should start
   uint8_t hapticLevel = 0;    // 0..255 continuous vibration strength
   uint8_t r = 0, g = 0, b = 0; // LED color, brightness already applied
+  uint32_t steps = 0;          // lifetime step count (the glue saves this)
 };
 
 struct Config {
@@ -55,6 +57,17 @@ struct Config {
   uint8_t wakeBuzzHaptic = 160;
   uint32_t wakeBuzzMs = 150;
   uint8_t maxBrightness = 140;        // LED cap (0..255) so it's never harsh
+
+  // Pedometer. A step is a short acceleration peak. Steps only count once several
+  // evenly-spaced peaks in a row confirm a walking rhythm, so a bump or a shake
+  // is not a step. Tuned on synthetic data only: re-tune on the real rock.
+  float stepThresholdG = 0.15f;       // peak height above the gravity baseline
+  uint32_t stepMinGapMs = 250;        // faster than this is one step's double bump
+  uint32_t stepMaxGapMs = 1500;       // slower than this breaks the rhythm
+  uint8_t stepsToConfirm = 4;         // steady peaks in a row before steps count
+  uint32_t milestoneSteps = 500;      // celebrate every this many lifetime steps
+  bool milestoneSound = true;
+  uint32_t celebrateMs = 1500;
 };
 
 class Behavior {
@@ -63,9 +76,13 @@ class Behavior {
   // Call every ~20-50 ms.
   Outputs update(const Inputs& in);
   State state() const { return state_; }
+  uint32_t steps() const { return steps_; }
+  // Restore the saved count at boot. Does not trigger a milestone celebration.
+  void setSteps(uint32_t s) { steps_ = s; }
 
  private:
   void enter(State s, uint32_t now);
+  void updateSteps(const Inputs& in);
   bool soundAllowed(uint32_t now) const;
   uint8_t scale(uint8_t v) const;
 
@@ -82,6 +99,17 @@ class Behavior {
   Sound pendingSound_ = Sound::None;
   bool wakeBuzz_ = false;
   uint32_t wakeBuzzSinceMs_ = 0;
+
+  // Pedometer state.
+  bool stepInit_ = false;
+  float accelLp_ = 1.0f, accelBase_ = 1.0f;
+  float dev1_ = 0, dev2_ = 0;   // the previous two filtered deviations
+  uint32_t t1_ = 0;             // time of dev1_
+  bool hasPeak_ = false;
+  uint32_t lastPeakMs_ = 0;
+  uint8_t streak_ = 0;
+  uint32_t steps_ = 0;
+  uint32_t celebrateUntilMs_ = 0;
 };
 
 }  // namespace rock

@@ -57,6 +57,60 @@ void Behavior::enter(State s, uint32_t now) {
   }
 }
 
+void Behavior::updateSteps(const Inputs& in) {
+  const uint32_t now = in.nowMs;
+  if (!stepInit_) {
+    stepInit_ = true;
+    accelLp_ = accelBase_ = in.accelG;
+    dev1_ = dev2_ = 0;
+    t1_ = now;
+    return;
+  }
+
+  accelLp_ += 0.4f * (in.accelG - accelLp_);    // smooth out sensor noise
+  accelBase_ += 0.02f * (accelLp_ - accelBase_);  // slow "gravity" baseline
+  const float dev = accelLp_ - accelBase_;
+
+  // The sample before this one was a peak if it was higher than both neighbours.
+  const bool counting = state_ == State::Calm || state_ == State::Purring;
+  if (dev1_ > dev2_ && dev1_ >= dev && dev1_ > cfg_.stepThresholdG) {
+    if (!counting) {
+      streak_ = 0;
+      hasPeak_ = false;
+    } else if (!hasPeak_ || (t1_ - lastPeakMs_) > cfg_.stepMaxGapMs) {
+      streak_ = 1;  // start of a possible walk
+      hasPeak_ = true;
+      lastPeakMs_ = t1_;
+    } else if ((t1_ - lastPeakMs_) >= cfg_.stepMinGapMs) {
+      streak_ = streak_ < 255 ? streak_ + 1 : 255;
+      lastPeakMs_ = t1_;
+      const uint32_t before = steps_;
+      if (streak_ == cfg_.stepsToConfirm) {
+        steps_ += cfg_.stepsToConfirm;  // the confirming peaks count retroactively
+      } else if (streak_ > cfg_.stepsToConfirm) {
+        steps_ += 1;
+      }
+      if (cfg_.milestoneSteps > 0 && steps_ / cfg_.milestoneSteps > before / cfg_.milestoneSteps) {
+        celebrateUntilMs_ = now + cfg_.celebrateMs;
+        if (cfg_.milestoneSound) pendingSound_ = Sound::StepCheer;
+      }
+    }
+    // else: a second bump inside the same step; ignore it.
+  }
+  if (hasPeak_ && (now - lastPeakMs_) > cfg_.stepMaxGapMs) {
+    streak_ = 0;
+    hasPeak_ = false;
+  }
+  if (!counting) {
+    streak_ = 0;
+    hasPeak_ = false;
+  }
+
+  dev2_ = dev1_;
+  dev1_ = dev;
+  t1_ = now;
+}
+
 Outputs Behavior::update(const Inputs& in) {
   const uint32_t now = in.nowMs;
   pendingSound_ = Sound::None;
@@ -126,6 +180,8 @@ Outputs Behavior::update(const Inputs& in) {
     }
   }
 
+  updateSteps(in);
+
   if (pendingSound_ == Sound::WakeChirp) {
     wakeBuzz_ = true;
     wakeBuzzSinceMs_ = now;
@@ -145,6 +201,7 @@ Outputs Behavior::update(const Inputs& in) {
   Outputs out;
   out.state = state_;
   out.sound = sound;
+  out.steps = steps_;
 
   switch (state_) {
     case State::Sleeping:
@@ -176,6 +233,15 @@ Outputs Behavior::update(const Inputs& in) {
       out.hapticLevel = 0;  // no buzzing while shaken
       break;
     }
+  }
+
+  // Milestone sparkle: blinking gold over whatever else is showing.
+  if (now < celebrateUntilMs_ && state_ != State::Sleeping && state_ != State::Dizzy) {
+    const uint8_t blink = triangle(now, 400);
+    const uint8_t v = scale((uint8_t)(80 + (blink * 175) / 255));
+    out.r = v;
+    out.g = (uint8_t)((uint16_t(v) * 170) / 255);
+    out.b = 0;
   }
   return out;
 }
